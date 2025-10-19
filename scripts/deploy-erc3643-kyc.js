@@ -40,6 +40,13 @@ async function main() {
   await dt.waitForDeployment();
   console.log("DebtToken:", await dt.getAddress());
 
+  // === 基础信息 ===
+  console.log("\n=== Basic Info ===");
+  console.log("name:", await dt.name());
+  console.log("symbol:", await dt.symbol());
+  console.log("decimals:", await dt.decimals());
+  console.log("totalSupply:", (await dt.totalSupply()).toString());
+
   // 3) 为发行方与多类型投资者设置身份 + 声明（identity = 自身地址）
   await ir.set(issuer.address, issuer.address, true);
 
@@ -47,6 +54,8 @@ async function main() {
   const ACC = await dt.ACCREDITED_CLAIM();
   const COUNTRY = await dt.COUNTRY_CLAIM();
   const US = ethers.keccak256(ethers.toUtf8Bytes("US"));
+  const SG = ethers.keccak256(ethers.toUtf8Bytes("SG"));
+  const CH = ethers.keccak256(ethers.toUtf8Bytes("CH"));
   const CN = ethers.keccak256(ethers.toUtf8Bytes("CN"));
 
   // 发行方：完全合规 US
@@ -54,8 +63,12 @@ async function main() {
   await cr.setClaim(issuer.address, ACC, US);
   await cr.setClaim(issuer.address, COUNTRY, US);
 
-  // 显式禁止 CN（默认即为 false，这里演示）
-  await dt.connect(issuer).blockCountry("CN");
+  // 国家白名单现状
+  console.log("\n=== Allowed Countries (initial) ===");
+  console.log("US:", await dt.allowedCountries(US));
+  console.log("SG:", await dt.allowedCountries(SG));
+  console.log("CH:", await dt.allowedCountries(CH));
+  console.log("CN:", await dt.allowedCountries(CN)); // 可能为 false
 
   // 3.1 完全合规（KYC + ACC + US）
   await ir.set(investorOK.address, investorOK.address, true);
@@ -85,6 +98,27 @@ async function main() {
   // 4) 转账检查
   const amt = ethers.parseUnits("1000", 18);
 
+  // 合规检查布尔值
+  console.log("\n=== Compliance checks ===");
+  console.log("ok:", await dt.isERC3643Compliant(investorOK.address));
+  console.log("noKYC:", await dt.isERC3643Compliant(investorNoKYC.address));
+  console.log("noACC:", await dt.isERC3643Compliant(investorNoACC.address));
+  console.log("badCountry:", await dt.isERC3643Compliant(investorBadCountry.address));
+  console.log("unverified:", await dt.isERC3643Compliant(investorUnverified.address));
+
+  // 注册表与声明概览
+  console.log("\n=== Registries & Claims ===");
+  console.log("IdentityRegistry:", await dt.identityRegistry());
+  console.log("ClaimsRegistry:", await dt.claimsRegistry());
+  console.log("isVerified(OK):", await ir.isVerified(investorOK.address));
+  console.log("hasClaim(OK,KYC):", await cr.hasClaim(investorOK.address, KYC));
+  console.log("getClaim(OK,COUNTRY):", await cr.getClaim(investorOK.address, COUNTRY));
+
+  // 持仓限制检查
+  console.log("\n=== Holding Limit ===");
+  console.log("maxHoldingPercentage:", (await dt.maxHoldingPercentage()).toString());
+  console.log("checkHoldingLimit(OK,1000):", await dt.checkHoldingLimit(investorOK.address, amt));
+
   async function tryTransfer(to, label) {
     try {
       await dt.connect(issuer).transfer(to, amt);
@@ -101,6 +135,14 @@ async function main() {
   await tryTransfer(investorNoACC.address, "NoACC");                   // 预期失败
   await tryTransfer(investorBadCountry.address, "BadCountry (CN)");    // 预期失败
   await tryTransfer(investorUnverified.address, "Unverified");         // 预期失败
+
+  // 尝试触发持仓上限（10%）
+  const total = await dt.totalSupply();
+  const max = (total * 1000n) / 10000n;
+  const cur = await dt.balanceOf(investorOK.address);
+  const exceedBy1 = max - cur + 1n;
+  console.log("\nExceed limit attempt...");
+  await tryTransfer(investorOK.address, `Exceed by 1 wei (${exceedBy1})`);
 
   // 5) 可选：演示利息/本金函数
   console.log("\nPay interest and redeem principal (owner only)...");

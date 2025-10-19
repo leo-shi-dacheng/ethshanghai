@@ -52,3 +52,73 @@ npx hardhat run --network localhost scripts/deploy-erc3643-kyc.js
 
 ## 下一步（可选）
 - 需要演示国家白名单或持仓上限的动态调整？可以新增脚本按需展示（例如允许/封禁国家、修改集中度阈值）。如需我补充脚本，请告诉我具体场景。
+
+## 交互演示（Hardhat Console）
+按条输入，每次一行即返结果。确保你已按上文脚本完成一次部署，拿到 `DebtToken` 合约地址。完整清单亦见：`docs/Interactive-Console-Runbook.md`。
+
+```bash
+# 打开控制台
+npx hardhat console --network localhost
+```
+
+```js
+// 1) 账户与合约实例（替换为你的 DebtToken 合约地址）
+const [issuer, ok, noKYC, noACC, badCountry, unverified] = await ethers.getSigners();
+const debtToken = await ethers.getContractAt("DebtToken", "<DebtToken_地址>");
+
+// 2) 基础查询
+await debtToken.name();
+await debtToken.symbol();
+await debtToken.decimals();
+await debtToken.totalSupply();
+await debtToken.balanceOf(issuer.address);
+await debtToken.balanceOf(ok.address);
+
+// 3) ERC-3643 合规检查
+await debtToken.isERC3643Compliant(ok.address);
+await debtToken.isERC3643Compliant(noKYC.address);
+// 白名单（回退模式兼容；本演示使用注册表时仅作参考）
+await debtToken.isWhitelisted(issuer.address);
+
+// 4) 角色管理
+await debtToken.complianceOfficer();
+await debtToken.transferAgent();
+// 设置新合规官（只有发行方/owner可设，示例设为 ok）
+await debtToken.connect(issuer).setComplianceOfficer(ok.address);
+
+// 5) 国家管理
+// 允许国家（只有合规官/owner可设）
+await debtToken.connect(issuer).allowCountry("CN");
+// 禁止特定国家
+await debtToken.connect(issuer).blockCountry("XX");
+
+// 6) 持仓限制
+await debtToken.maxHoldingPercentage(); // 基点：1000 = 10%
+await debtToken.checkHoldingLimit(ok.address, ethers.parseUnits("1000", 18));
+
+// 7) 注册表与声明（进阶）
+const irAddr = await debtToken.identityRegistry();
+const crAddr = await debtToken.claimsRegistry();
+const ir = await ethers.getContractAt("MockIdentityRegistry", irAddr);
+const cr = await ethers.getContractAt("MockClaimsRegistry", crAddr);
+const KYC = await debtToken.KYC_CLAIM();
+const ACC = await debtToken.ACCREDITED_CLAIM();
+const COUNTRY = await debtToken.COUNTRY_CLAIM();
+const US = ethers.keccak256(ethers.toUtf8Bytes("US"));
+const CN = ethers.keccak256(ethers.toUtf8Bytes("CN"));
+await ir.isVerified(ok.address);
+await cr.hasClaim(ok.address, KYC);
+await cr.getClaim(ok.address, COUNTRY);
+
+// 8) 实际转账
+// 合规地址（成功）
+await debtToken.connect(issuer).transfer(ok.address, ethers.parseUnits("1000", 18));
+// 不合规地址（会回退，控制台显示错误消息）
+await debtToken.connect(issuer).transfer(noKYC.address, ethers.parseUnits("1000", 18));
+
+// 9) 触发持仓上限回退（计算 10% 阈值后超 1 wei）
+const total = await debtToken.totalSupply();
+const max = (total * 1000n) / 10000n; // 10%
+const cur = await debtToken.balanceOf(ok.address);
+await debtToken.connect(issuer).transfer(ok.address, (max - cur + 1n));
+```
